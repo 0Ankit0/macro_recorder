@@ -54,3 +54,19 @@ def test_emergency_stop_cancels_countdown_and_playback():
     c.emergency_stop()
     events = c.pump_events()
     assert any(e.type == "emergency_stopped" for e in events)
+
+
+def test_shortcut_triggered_dispatches_command():
+    q = Queue()
+    c = AppController(FakeRecordingBackend(q), FakePlaybackBackend(), StorageService(), q)
+    c.queue.put(type("E", (), {"type": "shortcut_triggered", "payload": {"command_id": "toggle_recording"}})())
+    c.pump_events()
+    assert c._record_countdown_active is True
+
+
+def test_play_shortcut_requires_actions():
+    q = Queue()
+    c = AppController(FakeRecordingBackend(q), FakePlaybackBackend(), StorageService(), q)
+    assert c.execute_command("play_once") is False
+    c.document.actions = [{"t_ms": 0, "kind": "key_down", "key": "a"}]
+    assert c.execute_command("play_once") is True
