@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, ttk
 
+from macro_recorder.app.commands import SHORTCUT_DEFINITIONS
 from macro_recorder.app.controller import AppController
 from macro_recorder.domain.models import action_label
 
@@ -25,11 +26,12 @@ class MacroDashboard:
         self.log_lines: list[str] = []
         self._build()
         self._bind_hotkeys()
+        self._refresh_shortcuts()
         self._poll_queue()
 
     def _build(self) -> None:
         self.root.title("Macro Recorder")
-        self.root.geometry("1100x700")
+        self.root.geometry("1150x760")
         style = ttk.Style()
         style.configure("Card.TLabelframe", padding=12)
 
@@ -58,15 +60,13 @@ class MacroDashboard:
 
         rec = ttk.LabelFrame(left, text="Record", style="Card.TLabelframe")
         rec.pack(fill=tk.X, pady=6)
-        self.record_btn = ttk.Button(rec, text="Start Recording", command=self.on_record_toggle)
+        self.record_btn = ttk.Button(rec, command=lambda: self._dispatch("toggle_recording"))
         self.record_btn.pack(fill=tk.X, pady=4)
-        if not self.permissions_ok:
-            self.record_btn.configure(state=tk.DISABLED)
-            ttk.Label(rec, text="Enable System Settings → Privacy & Security → Input Monitoring and Accessibility.").pack(fill=tk.X)
 
         run = ttk.LabelFrame(left, text="Run Once / Loop", style="Card.TLabelframe")
         run.pack(fill=tk.X, pady=6)
-        ttk.Button(run, text="Play Once", command=self.on_play_once).pack(fill=tk.X, pady=4)
+        self.play_btn = ttk.Button(run, command=lambda: self._dispatch("play_once"))
+        self.play_btn.pack(fill=tk.X, pady=4)
         ttk.Label(run, text="Interval minutes").pack(anchor=tk.W)
         ttk.Entry(run, textvariable=self.interval_var).pack(fill=tk.X)
         ttk.Label(run, text="Stop after runs (0=∞)").pack(anchor=tk.W)
@@ -74,7 +74,16 @@ class MacroDashboard:
         ttk.Label(run, text="Speed").pack(anchor=tk.W)
         ttk.Combobox(run, values=["0.5", "1.0", "1.5", "2.0"], textvariable=self.speed_var, state="readonly").pack(fill=tk.X)
         ttk.Button(run, text="Start Loop", command=self.on_start_loop).pack(fill=tk.X, pady=4)
-        ttk.Button(run, text="Emergency Stop (Esc)", command=self.on_emergency_stop).pack(fill=tk.X)
+        self.stop_btn = ttk.Button(run, command=lambda: self._dispatch("emergency_stop"))
+        self.stop_btn.pack(fill=tk.X)
+
+        shortcuts = ttk.LabelFrame(left, text="Shortcuts", style="Card.TLabelframe")
+        shortcuts.pack(fill=tk.BOTH, expand=False, pady=6)
+        self.shortcut_tree = ttk.Treeview(shortcuts, columns=("action", "shortcut", "scope", "status"), show="headings", height=4)
+        for col, width in (("action", 150), ("shortcut", 110), ("scope", 90), ("status", 170)):
+            self.shortcut_tree.heading(col, text=col.title())
+            self.shortcut_tree.column(col, width=width, anchor=tk.W)
+        self.shortcut_tree.pack(fill=tk.X)
 
         settings = ttk.LabelFrame(left, text="Settings", style="Card.TLabelframe")
         settings.pack(fill=tk.X, pady=6)
@@ -101,30 +110,39 @@ class MacroDashboard:
         ttk.Label(bottom, textvariable=self.banner_var).pack(side=tk.LEFT)
         self.log = tk.Text(shell, height=6)
         self.log.pack(fill=tk.X)
+        self._refresh_button_labels()
+
+    def _refresh_button_labels(self) -> None:
+        labels = {item.command_id: item for item in SHORTCUT_DEFINITIONS}
+        record_prefix = "Stop Recording" if self.controller.recording.is_recording else "Start Recording"
+        self.record_btn.configure(text=f"{record_prefix} ({labels['toggle_recording'].accelerator})")
+        self.play_btn.configure(text=f"Play Once ({labels['play_once'].accelerator})")
+        self.stop_btn.configure(text=f"Emergency Stop ({labels['emergency_stop'].accelerator})")
+
+    def _refresh_shortcuts(self) -> None:
+        self.shortcut_tree.delete(*self.shortcut_tree.get_children())
+        ctx = self.controller.command_context()
+        scope = "Global" if self.permissions_ok and self.controller.backend_ok else "Window"
+        for item in SHORTCUT_DEFINITIONS:
+            status = "Ready" if item.availability(ctx) else ("Needs permissions" if not self.permissions_ok else "Unavailable")
+            self.shortcut_tree.insert("", tk.END, values=(item.action_label, item.accelerator, scope if item.scope == "Global" else item.scope, status))
 
     def _bind_hotkeys(self) -> None:
-        self.root.bind_all("<Command-Shift-R>", lambda _: self.on_record_toggle())
-        self.root.bind_all("<Command-Shift-P>", lambda _: self.on_play_once())
-        self.root.bind_all("<Escape>", lambda _: self.on_emergency_stop())
+        self.root.bind_all("<Command-Shift-R>", lambda _: self._dispatch("toggle_recording"))
+        self.root.bind_all("<Command-Shift-P>", lambda _: self._dispatch("play_once"))
+        self.root.bind_all("<Escape>", lambda _: self._dispatch("emergency_stop"))
 
-    def on_record_toggle(self) -> None:
-        if self.controller.recording.is_recording:
-            self.controller.stop_recording()
-            self.record_btn.configure(text="Start Recording")
-        else:
-            self.banner_var.set("Recording starts in 3...")
-            self.controller.start_record_countdown()
-
-    def on_play_once(self) -> None:
-        self.banner_var.set("Playback starts in 3...")
-        self.controller.start_play_countdown()
+    def _dispatch(self, command_id: str) -> None:
+        handled = self.controller.execute_command(command_id, speed=float(self.speed_var.get()))
+        if not handled:
+            self.banner_var.set(f"{command_id} ignored in current state")
+        self._refresh_button_labels()
+        self._refresh_shortcuts()
 
     def on_start_loop(self) -> None:
         self.controller.start_loop(float(self.interval_var.get()), int(self.max_runs_var.get()), float(self.speed_var.get()))
         self.mode_var.set("Looping")
-
-    def on_emergency_stop(self) -> None:
-        self.controller.emergency_stop()
+        self._refresh_shortcuts()
 
     def on_save(self) -> None:
         self.controller.document.name = self.name_var.get().strip() or "Untitled Macro"
@@ -170,8 +188,8 @@ class MacroDashboard:
         elif event_type == "record_done":
             self.root.iconify()
             self.controller.start_recording_now()
-            self.record_btn.configure(text="Stop Recording")
             self.mode_var.set("Recording")
+            self._refresh_button_labels()
         elif event_type == "play_tick":
             self.banner_var.set(f"Playback starts in {payload['remaining']}...")
         elif event_type == "play_done":
@@ -194,6 +212,13 @@ class MacroDashboard:
         elif event_type == "emergency_stopped":
             self.mode_var.set("Stopped")
             self.banner_var.set("Emergency stop")
+        elif event_type == "permissions_state":
+            self.permission_var.set("Trusted" if payload["trusted"] else "Missing macOS Input Monitoring")
+        elif event_type == "backend_error":
+            self.banner_var.set(payload["message"])
+        elif event_type == "shortcut_triggered":
+            self.banner_var.set(f"Shortcut: {payload['command_id']}")
 
+        self._refresh_shortcuts()
         self.log.insert(tk.END, f"{event_type} {payload}\n")
         self.log.see(tk.END)

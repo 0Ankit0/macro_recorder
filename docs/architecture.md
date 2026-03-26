@@ -9,39 +9,35 @@ The app is split into four subsystems:
 
 2. **Input Backends**
    - `macro_recorder/input_backends/pynput_backend.py`
-   - Uses `pynput` listeners for global capture and controllers for playback.
-   - Filters macro control hotkeys from recorded key events.
+   - Mouse capture/playback still use `pynput` listeners/controllers.
+   - Keyboard trust checks use a non-listener probe (`Listener.IS_TRUSTED` or `AXIsProcessTrusted`).
+   - A long-lived keyboard monitor drives both global shortcut dispatch and keyboard recording.
+   - Registered shortcut chords are normalized and excluded from recorded macro actions.
 
 3. **Controller + Services**
-   - `macro_recorder/app/controller.py`: central app orchestration and event pump.
+   - `macro_recorder/app/controller.py`: central app orchestration, command dispatch, event pump.
+   - `macro_recorder/app/commands.py`: shared shortcut/command registry used by UI + backend.
    - `macro_recorder/app/recording_service.py`: record lifecycle and action normalization pipeline.
    - `macro_recorder/app/playback_service.py`: one-shot playback and interval looping.
    - `macro_recorder/app/countdown.py`: worker-thread countdown with queue events.
 
 4. **UI / Views**
    - `macro_recorder/ui/dashboard.py`: single-window Tk/ttk dashboard.
+   - Buttons and shortcut hints are generated from the command registry.
+   - Dedicated Shortcuts table shows action, chord, scope, and current status.
    - `macro_recorder/ui/app.py`: composition root that wires backends + services + UI.
    - `main.py`: thin launcher only.
 
-## Threading model
+## Shortcut state machine
 
-- Tk main thread never receives direct updates from worker threads.
-- Worker components emit `AppEvent` objects into `queue.Queue`.
-- UI polls queue via `root.after(...)` and applies state updates in main thread.
+- `Cmd+Shift+R`: idle → record countdown; recording → stop recording; ignored during playback/loop.
+- `Cmd+Shift+P`: idle + actions present → play countdown; ignored during recording/loop.
+- `Esc`: always emergency-stop (countdown, recording, playback, loop).
 
-## Core runtime flow
+## Fallback behavior
 
-1. User triggers **Record** or **Play**.
-2. Controller starts a 3-second countdown.
-3. Countdown emits tick events (`*_tick`) and completion event (`*_done`).
-4. Controller/service starts backend work.
-5. Backends emit progress/action events into queue.
-6. UI poll loop consumes events and updates timeline/status/log.
-
-## Safety controls
-
-- Global hotkeys:
-  - `Cmd+Shift+R`: toggle recording
-  - `Cmd+Shift+P`: play once
-  - `Esc`: emergency stop
-- Emergency stop cancels countdowns, listeners, playback, and loops.
+- If keyboard trust is missing or keyboard monitor startup fails:
+  - app stays open,
+  - backend error event is emitted,
+  - global shortcuts are marked unavailable,
+  - window-level Tk bindings remain active.
