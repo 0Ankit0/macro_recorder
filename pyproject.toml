@@ -1,0 +1,17 @@
+[project]
+name = "macro-recorder"
+version = "0.1.0"
+description = "Modular macOS macro recorder"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "pynput>=1.7.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
